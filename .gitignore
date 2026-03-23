@@ -6,8 +6,7 @@ venv/
 # Environment
 .env
 
-# Data (videos are too large for git)
-data/input/*.mp4
+# Data
 data/output/*.mp4
 data/reports/*.json
 data/reports/*.png
