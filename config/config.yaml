@@ -1,0 +1,36 @@
+system:
+  name: "Thermal Roller Monitoring POC"
+  version: "1.0.0"
+
+video:
+  input_path: "data/input/HM20260306030108.mp4"
+  output_path: "data/output/processed_thermal.mp4"
+  fps: 30
+
+detection:
+  temperature_threshold: 40.0    # °C - umbral de alerta
+  critical_threshold: 50.0       # °C - umbral crítico (muy caliente)
+  min_detection_area: 200        # píxeles mínimos (evita ruido y detecciones pequeñas)
+  cooldown_seconds: 5            # tiempo entre alertas del mismo objeto
+
+tracking:
+  max_disappeared: 75            # Frames (~3s a 25fps) antes de marcar objeto como desaparecido
+  max_distance: 150.0            # Distancia máxima (píxeles) para considerar mismo objeto
+  min_confirm_frames: 5          # Detecciones mínimas antes de confirmar un objeto (filtra ruido)
+
+thermal:
+  colormap: "rainbow"            # rainbow (como el video exportado)
+  # Rango para mapeo RGB -> temperatura (debe coincidir con el rango manual de la cámara)
+  temp_range_min: 25             # °C (mínimo configurado en la cámara)
+  temp_range_max: 60             # °C (máximo configurado en la cámara)
+
+alerts:
+  enabled: false                 # Deshabilitado por ahora
+
+visualization:
+  show_bbox: true
+  show_temperature_text: true
+  show_timestamp: true
+  bbox_color: [0, 0, 255]        # RGB Rojo
+  bbox_thickness: 2
+  font_scale: 0.6

@@ -1,0 +1,10 @@
+opencv-python-headless
+numpy
+scipy
+pandas
+matplotlib
+streamlit
+pyyaml
+python-dotenv
+loguru
+requests
