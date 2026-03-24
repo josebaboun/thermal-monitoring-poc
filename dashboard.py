@@ -190,6 +190,14 @@ min_area = st.sidebar.slider(
     disabled=st.session_state.processing,
 )
 
+# Telegram alerts toggle
+st.sidebar.markdown("#### 📲 Alertas Telegram")
+telegram_enabled = st.sidebar.toggle(
+    "Enviar alertas por Telegram",
+    value=True,
+    disabled=st.session_state.processing,
+)
+
 # Frames per batch — higher = smoother (fragment reruns are lightweight)
 FRAMES_PER_BATCH = 30
 
@@ -219,6 +227,7 @@ if not st.session_state.processing:
         st.session_state.cfg_temp_min = temp_range_min
         st.session_state.cfg_temp_max = temp_range_max
         st.session_state.cfg_video = str(video_path)
+        st.session_state.cfg_telegram = telegram_enabled
         st.rerun()
 else:
     col_pause, col_stop = st.sidebar.columns(2)
@@ -481,7 +490,7 @@ def monitoring_display():
                         st.session_state.last_object_id = obj_id
 
                         # Send Telegram alert (first detection only)
-                        if not st.session_state.telegram_sent:
+                        if st.session_state.get("cfg_telegram", False) and not st.session_state.telegram_sent:
                             _bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
                             _chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
                             if _bot_token and _chat_id:
