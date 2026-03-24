@@ -276,6 +276,12 @@ def _render_alerts():
     alerts_placeholder.markdown(html, unsafe_allow_html=True)
 
 
+# --- Helper: convert frame to JPEG bytes (avoids Streamlit media file errors) ---
+def _frame_to_bytes(frame_rgb):
+    _, buf = cv2.imencode(".jpg", cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 90])
+    return buf.tobytes()
+
+
 # --- Helper: update metrics ---
 def _update_metrics():
     with metric_temp:
@@ -443,9 +449,10 @@ if st.session_state.processing and not st.session_state.paused:
             st.session_state.total_count = total
 
             frame_rgb = cv2.cvtColor(output_frame, cv2.COLOR_BGR2RGB)
-            st.session_state.last_frame_rgb = frame_rgb
+            frame_bytes = _frame_to_bytes(frame_rgb)
+            st.session_state.last_frame_rgb = frame_bytes
 
-            video_placeholder.image(frame_rgb, use_container_width=True)
+            video_placeholder.image(frame_bytes, use_container_width=True)
             progress_bar.progress((frame_idx + 1) / st.session_state.total_frames)
 
             _update_metrics()
