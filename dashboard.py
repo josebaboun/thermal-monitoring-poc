@@ -1,6 +1,7 @@
 """Interactive Streamlit dashboard for thermal monitoring demo."""
 
 import base64
+import io as _io
 import json
 import os
 import sys
@@ -9,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
 from dotenv import load_dotenv
@@ -162,8 +164,8 @@ playback_speed = st.sidebar.slider(
     value=1.0, step=0.25,
 )
 
-# Frames per batch (higher = smoother but less responsive to buttons)
-FRAMES_PER_BATCH = 15
+# Frames per batch — higher = smoother (fragment reruns are lightweight)
+FRAMES_PER_BATCH = 30
 
 # --- Control buttons ---
 st.sidebar.markdown("---")
@@ -218,29 +220,94 @@ st.sidebar.info("""
 Detecta automáticamente objetos sobrecalentados en videos termográficos.
 """)
 
-# --- Main layout ---
-col1, col2 = st.columns([1.5, 1])
 
-with col1:
-    st.markdown("### 📹 Video en Tiempo Real")
-    video_placeholder = st.empty()
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+# =====================================================================
+# Fragment: all dynamic content (video, metrics, chart, alerts)
+# Only this section reruns between batches — sidebar & header stay stable.
+# =====================================================================
+@st.fragment
+def monitoring_display():
+    """Fragment that handles video display, metrics, chart, and alerts."""
+    col1, col2 = st.columns([1.5, 1])
 
-with col2:
-    st.markdown("### 📊 Métricas")
-    col2_1, col2_2 = st.columns(2)
-    with col2_1:
-        metric_temp = st.empty()
-    with col2_2:
-        metric_detections = st.empty()
-    metric_progress = st.empty()
+    with col1:
+        st.markdown("### 📹 Video en Tiempo Real")
+        video_placeholder = st.empty()
+        progress_bar = st.progress(0)
+        status_text = st.empty()
 
-    # Temperature chart - rendered with matplotlib (avoids altair/Python 3.14 issues)
-    if len(st.session_state.temp_history) >= 2:
-        import matplotlib.pyplot as plt
-        import io as _io
-        st.markdown("#### 🌡️ Temperatura Máxima")
+    with col2:
+        st.markdown("### 📊 Métricas")
+        col2_1, col2_2 = st.columns(2)
+        with col2_1:
+            metric_temp = st.empty()
+        with col2_2:
+            metric_detections = st.empty()
+        metric_progress = st.empty()
+
+        # Temperature chart placeholder
+        chart_placeholder = st.empty()
+
+        st.markdown("---")
+        st.markdown(
+            '<p class="detection-header">🚨 Alertas en Tiempo Real</p>',
+            unsafe_allow_html=True,
+        )
+        alerts_placeholder = st.empty()
+
+    # --- Helpers ---
+    def _render_alerts():
+        if not st.session_state.detections_log:
+            return
+        recent = st.session_state.detections_log[-10:]
+        html = ""
+        for alert in reversed(recent):
+            cls = "critical-alert" if alert["severity"] == "critical" else "warning-alert"
+            icon = "🔴" if alert["severity"] == "critical" else "🟡"
+            bbox = alert.get("bbox", (0, 0, 0, 0))
+            html += f"""
+            <div class="{cls}">
+                {icon} <strong>NUEVO OBJETO DETECTADO</strong><br>
+                ID: #{alert["object_id"]} | Frame {alert["frame"]} - {alert["timestamp"]}<br>
+                Temperatura: {alert["max_temp"]:.1f}°C<br>
+                Posición: ({bbox[0]}, {bbox[1]}) | Tamaño: {bbox[2]}x{bbox[3]}px
+            </div>
+            """
+        alerts_placeholder.markdown(html, unsafe_allow_html=True)
+
+    def _show_frame(frame_rgb):
+        _, buf = cv2.imencode(
+            ".jpg",
+            cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR),
+            [cv2.IMWRITE_JPEG_QUALITY, 85],
+        )
+        b64 = base64.b64encode(buf.tobytes()).decode()
+        html = f'<img src="data:image/jpeg;base64,{b64}" style="width:100%;border-radius:8px;">'
+        video_placeholder.markdown(html, unsafe_allow_html=True)
+        return b64
+
+    def _update_metrics():
+        with metric_temp:
+            t = st.session_state.current_max_temp
+            cfg_crit = st.session_state.get("cfg_critical", 50.0)
+            if t > 0:
+                icon = "🔴" if t > cfg_crit else "🟡"
+                st.metric("🌡️ Temp. Actual", f"{t:.1f}°C", delta=icon)
+            else:
+                st.metric("🌡️ Temp. Actual", "Normal", delta="✅")
+        with metric_detections:
+            st.metric(
+                "🎯 Objetos Únicos",
+                f"{st.session_state.total_count}",
+                delta=f"Activos: {st.session_state.active_count}",
+            )
+        with metric_progress:
+            total = st.session_state.total_frames or 1
+            st.metric("⏱️ Frame", f"{st.session_state.frame_idx}/{total}")
+
+    def _render_chart():
+        if len(st.session_state.temp_history) < 2:
+            return
         history = st.session_state.temp_history
         step = max(1, len(history) // 200)
         sampled = history[::step]
@@ -261,265 +328,208 @@ with col2:
         plt.close(fig)
         buf.seek(0)
         chart_b64 = base64.b64encode(buf.read()).decode()
-        st.markdown(
+        chart_placeholder.markdown(
             f'<img src="data:image/png;base64,{chart_b64}" style="width:100%;">',
             unsafe_allow_html=True,
         )
 
-    st.markdown("---")
-    st.markdown(
-        '<p class="detection-header">🚨 Alertas en Tiempo Real</p>',
-        unsafe_allow_html=True,
-    )
-    alerts_placeholder = st.empty()
-
-
-# --- Helper: render alerts HTML ---
-def _render_alerts():
-    if not st.session_state.detections_log:
-        return
-    recent = st.session_state.detections_log[-10:]
-    html = ""
-    for alert in reversed(recent):
-        cls = "critical-alert" if alert["severity"] == "critical" else "warning-alert"
-        icon = "🔴" if alert["severity"] == "critical" else "🟡"
-        bbox = alert.get("bbox", (0, 0, 0, 0))
-        html += f"""
-        <div class="{cls}">
-            {icon} <strong>NUEVO OBJETO DETECTADO</strong><br>
-            ID: #{alert["object_id"]} | Frame {alert["frame"]} - {alert["timestamp"]}<br>
-            Temperatura: {alert["max_temp"]:.1f}°C<br>
-            Posición: ({bbox[0]}, {bbox[1]}) | Tamaño: {bbox[2]}x{bbox[3]}px
-        </div>
-        """
-    alerts_placeholder.markdown(html, unsafe_allow_html=True)
-
-
-# --- Helper: render frame as base64 HTML (avoids Streamlit media file errors) ---
-def _show_frame(placeholder, frame_rgb):
-    _, buf = cv2.imencode(".jpg", cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR),
-                          [cv2.IMWRITE_JPEG_QUALITY, 85])
-    b64 = base64.b64encode(buf.tobytes()).decode()
-    html = f'<img src="data:image/jpeg;base64,{b64}" style="width:100%;border-radius:8px;">'
-    placeholder.markdown(html, unsafe_allow_html=True)
-    return b64
-
-
-# --- Helper: update metrics ---
-def _update_metrics():
-    with metric_temp:
-        t = st.session_state.current_max_temp
-        if t > 0:
-            icon = "🔴" if t > critical_threshold else "🟡"
-            st.metric("🌡️ Temp. Actual", f"{t:.1f}°C", delta=icon)
-        else:
-            st.metric("🌡️ Temp. Actual", "Normal", delta="✅")
-    with metric_detections:
-        st.metric(
-            "🎯 Objetos Únicos",
-            f"{st.session_state.total_count}",
-            delta=f"Activos: {st.session_state.active_count}",
+    # --- Show last frame between reruns ---
+    if st.session_state.last_frame_rgb is not None:
+        video_placeholder.markdown(
+            f'<img src="data:image/jpeg;base64,{st.session_state.last_frame_rgb}" style="width:100%;border-radius:8px;">',
+            unsafe_allow_html=True,
         )
-    with metric_progress:
-        total = st.session_state.total_frames or 1
-        st.metric("⏱️ Frame", f"{st.session_state.frame_idx}/{total}")
+        if st.session_state.total_frames > 0:
+            progress_bar.progress(
+                min(st.session_state.frame_idx / st.session_state.total_frames, 1.0)
+            )
+        _update_metrics()
+        _render_chart()
+        _render_alerts()
 
+    # --- Paused state ---
+    if st.session_state.processing and st.session_state.paused:
+        status_text.warning(f"⏸️ En pausa — Frame {st.session_state.frame_idx}")
 
-# --- Show last frame if paused or between reruns ---
-if st.session_state.last_frame_rgb is not None:
-    video_placeholder.markdown(
-        f'<img src="data:image/jpeg;base64,{st.session_state.last_frame_rgb}" style="width:100%;border-radius:8px;">',
-        unsafe_allow_html=True,
-    )
-    if st.session_state.total_frames > 0:
-        progress_bar.progress(st.session_state.frame_idx / st.session_state.total_frames)
-    _update_metrics()
+    # --- Process a batch of frames ---
+    if st.session_state.processing and not st.session_state.paused:
+        _thermal = {
+            "temp_range_min": st.session_state.cfg_temp_min,
+            "temp_range_max": st.session_state.cfg_temp_max,
+        }
+        _detection = {
+            "temperature_threshold": st.session_state.cfg_threshold,
+            "critical_threshold": st.session_state.cfg_critical,
+            "min_detection_area": st.session_state.cfg_min_area,
+        }
 
-    _render_alerts()
+        temp_extractor = TemperatureExtractor(_thermal)
+        detector = ThermalDetector(_detection)
+        tracker = ThermalObjectTracker(
+            max_disappeared=config.get("tracking.max_disappeared", 75),
+            max_distance=config.get("tracking.max_distance", 150.0),
+            min_confirm_frames=config.get("tracking.min_confirm_frames", 5),
+        )
+        renderer = VideoRenderer(config.visualization)
+        video_proc = VideoProcessor(config.video)
 
-# --- Paused state ---
-if st.session_state.processing and st.session_state.paused:
-    status_text.warning(f"⏸️ En pausa — Frame {st.session_state.frame_idx}")
+        try:
+            video_proc.load(st.session_state.cfg_video)
+            video_info = video_proc.get_video_info()
+            st.session_state.total_frames = video_info["total_frames"]
+            fps = video_info["fps"]
 
-# --- Process a batch of frames ---
-if st.session_state.processing and not st.session_state.paused:
-    # Rebuild components from config snapshot
-    _thermal = {
-        "temp_range_min": st.session_state.cfg_temp_min,
-        "temp_range_max": st.session_state.cfg_temp_max,
-    }
-    _detection = {
-        "temperature_threshold": st.session_state.cfg_threshold,
-        "critical_threshold": st.session_state.cfg_critical,
-        "min_detection_area": st.session_state.cfg_min_area,
-    }
+            # Seek to current frame position
+            frame_idx = st.session_state.frame_idx
+            if frame_idx > 0:
+                video_proc.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
 
-    temp_extractor = TemperatureExtractor(_thermal)
-    detector = ThermalDetector(_detection)
-    tracker = ThermalObjectTracker(
-        max_disappeared=config.get("tracking.max_disappeared", 75),
-        max_distance=config.get("tracking.max_distance", 150.0),
-        min_confirm_frames=config.get("tracking.min_confirm_frames", 5),
-    )
-    renderer = VideoRenderer(config.visualization)
-    video_proc = VideoProcessor(config.video)
+            # Calculate timing
+            target_fps = fps * playback_speed
+            frame_delay = 1.0 / target_fps if target_fps > 0 else 0.04
 
-    try:
-        video_proc.load(st.session_state.cfg_video)
-        video_info = video_proc.get_video_info()
-        st.session_state.total_frames = video_info["total_frames"]
-        fps = video_info["fps"]
+            frames_processed = 0
+            finished = False
 
-        # Seek to current frame position
-        frame_idx = st.session_state.frame_idx
-        if frame_idx > 0:
-            video_proc.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            while frames_processed < FRAMES_PER_BATCH:
+                ret, frame = video_proc.read_frame()
+                if not ret:
+                    finished = True
+                    break
 
-        # We need to replay tracker state — rebuild from detection log
-        # For simplicity, re-run tracker on stored detections isn't feasible,
-        # so we store/restore tracker state via a simpler approach:
-        # process frames in the batch and persist only the essential outputs.
+                start_time = time.time()
 
-        # Calculate timing
-        target_fps = fps * playback_speed
-        frame_delay = 1.0 / target_fps if target_fps > 0 else 0.04
+                temp_frame = temp_extractor.extract_from_rgb(frame)
+                detections, hot_mask = detector.detect(temp_frame)
+                tracked = tracker.update(detections, frame_idx)
 
-        frames_processed = 0
-        finished = False
+                # Check for new confirmed objects
+                new_objects = {
+                    obj_id: info
+                    for obj_id, info in tracked.items()
+                    if obj_id > st.session_state.last_object_id
+                }
 
-        # Render chart immediately so it doesn't disappear between reruns
-    
+                # Update stats
+                current_max_temp = 0.0
+                if detections:
+                    current_max_temp = detections[0]["max_temperature"]
+                    st.session_state.max_temp_overall = max(
+                        st.session_state.max_temp_overall, current_max_temp
+                    )
+                st.session_state.current_max_temp = current_max_temp
 
-        while frames_processed < FRAMES_PER_BATCH:
-            ret, frame = video_proc.read_frame()
-            if not ret:
-                finished = True
-                break
+                # Record temperature for chart
+                if detections:
+                    chart_temp = detections[0]["max_temperature"]
+                else:
+                    mask = temp_frame[35:-15, 8:]
+                    chart_temp = float(np.percentile(mask, 95))
+                st.session_state.temp_history.append({
+                    "frame": frame_idx,
+                    "time": frame_idx / fps if fps > 0 else 0,
+                    "temp": chart_temp,
+                })
 
-            start_time = time.time()
-
-            temp_frame = temp_extractor.extract_from_rgb(frame)
-            detections, hot_mask = detector.detect(temp_frame)
-            tracked = tracker.update(detections, frame_idx)
-
-            # Check for new confirmed objects
-            new_objects = {
-                obj_id: info
-                for obj_id, info in tracked.items()
-                if obj_id > st.session_state.last_object_id
-            }
-
-            # Update stats
-            current_max_temp = 0.0
-            if detections:
-                current_max_temp = detections[0]["max_temperature"]
-                st.session_state.max_temp_overall = max(
-                    st.session_state.max_temp_overall, current_max_temp
+                # Render frame with overlays
+                output_frame = renderer.render(
+                    frame, temp_frame, detections, timestamp=video_proc.get_timestamp()
                 )
-            st.session_state.current_max_temp = current_max_temp
 
-            # Record max detection temp (or P95 of analysis region if no detection)
-            if detections:
-                chart_temp = detections[0]["max_temperature"]
+                if new_objects:
+                    for obj_id, obj_info in new_objects.items():
+                        bbox = obj_info["bbox"]
+                        timestamp = video_proc.get_timestamp()
+                        st.session_state.detections_log.append({
+                            "object_id": obj_id,
+                            "frame": frame_idx,
+                            "timestamp": timestamp,
+                            "max_temp": obj_info["max_temperature"],
+                            "severity": obj_info["severity"],
+                            "bbox": bbox,
+                            "type": "new_object",
+                        })
+                        st.session_state.last_object_id = obj_id
+
+                        # Send Telegram alert (first detection only)
+                        if not st.session_state.telegram_sent:
+                            _bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+                            _chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+                            if _bot_token and _chat_id:
+                                _tg = TelegramNotifier(_bot_token, _chat_id)
+                                sent = _tg.send_alert(
+                                    frame_bgr=output_frame,
+                                    object_id=obj_id,
+                                    temperature=obj_info["max_temperature"],
+                                    severity=obj_info["severity"],
+                                    bbox=bbox,
+                                    timestamp=timestamp,
+                                    frame_number=frame_idx,
+                                )
+                                if sent:
+                                    st.session_state.telegram_sent = True
+
+                st.session_state.tracked_objects = tracker.get_all_objects()
+                active, total = tracker.get_object_count()
+                st.session_state.active_count = active
+                st.session_state.total_count = total
+
+                frame_rgb = cv2.cvtColor(output_frame, cv2.COLOR_BGR2RGB)
+                b64 = _show_frame(frame_rgb)
+                st.session_state.last_frame_rgb = b64
+                progress_bar.progress(
+                    (frame_idx + 1) / st.session_state.total_frames
+                )
+
+                _update_metrics()
+                _render_chart()
+                _render_alerts()
+
+                status_text.info(
+                    f"🔄 Procesando: Frame {frame_idx + 1}/{st.session_state.total_frames}"
+                )
+
+                frame_idx += 1
+                frames_processed += 1
+
+                # Playback speed delay
+                elapsed = time.time() - start_time
+                time.sleep(max(0, frame_delay - elapsed))
+
+            video_proc.release()
+            st.session_state.frame_idx = frame_idx
+
+            if finished:
+                st.session_state.processing = False
+                st.session_state.processed = True
+                status_text.success("✅ ¡Monitoreo completado!")
+                progress_bar.progress(1.0)
+                with metric_temp:
+                    st.metric(
+                        "🌡️ Temp. Máxima",
+                        f"{st.session_state.max_temp_overall:.1f}°C",
+                    )
+                with metric_detections:
+                    st.metric("🎯 Objetos Únicos", st.session_state.total_count)
+                with metric_progress:
+                    st.metric(
+                        "📊 Total Alertas",
+                        len(st.session_state.detections_log),
+                    )
             else:
-                # Use 95th percentile of analysis area (excludes overlay)
-                mask = temp_frame[35:-15, 8:]
-                chart_temp = float(np.percentile(mask, 95))
-            st.session_state.temp_history.append({
-                "frame": frame_idx,
-                "time": frame_idx / fps if fps > 0 else 0,
-                "temp": chart_temp,
-            })
+                # Continue processing — only this fragment reruns
+                st.rerun()
 
-            # Render frame with overlays (before alerts so we can send the image)
-            output_frame = renderer.render(
-                frame, temp_frame, detections, timestamp=video_proc.get_timestamp()
-            )
-
-            if new_objects:
-                for obj_id, obj_info in new_objects.items():
-                    bbox = obj_info["bbox"]
-                    timestamp = video_proc.get_timestamp()
-                    st.session_state.detections_log.append({
-                        "object_id": obj_id,
-                        "frame": frame_idx,
-                        "timestamp": timestamp,
-                        "max_temp": obj_info["max_temperature"],
-                        "severity": obj_info["severity"],
-                        "bbox": bbox,
-                        "type": "new_object",
-                    })
-                    st.session_state.last_object_id = obj_id
-
-                    # Send Telegram alert (first detection only)
-                    if not st.session_state.telegram_sent:
-                        _bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-                        _chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-                        if _bot_token and _chat_id:
-                            _tg = TelegramNotifier(_bot_token, _chat_id)
-                            sent = _tg.send_alert(
-                                frame_bgr=output_frame,
-                                object_id=obj_id,
-                                temperature=obj_info["max_temperature"],
-                                severity=obj_info["severity"],
-                                bbox=bbox,
-                                timestamp=timestamp,
-                                frame_number=frame_idx,
-                            )
-                            if sent:
-                                st.session_state.telegram_sent = True
-
-            st.session_state.tracked_objects = tracker.get_all_objects()
-            active, total = tracker.get_object_count()
-            st.session_state.active_count = active
-            st.session_state.total_count = total
-
-            frame_rgb = cv2.cvtColor(output_frame, cv2.COLOR_BGR2RGB)
-            b64 = _show_frame(video_placeholder, frame_rgb)
-            st.session_state.last_frame_rgb = b64
-            progress_bar.progress((frame_idx + 1) / st.session_state.total_frames)
-
-            _update_metrics()
-            _render_alerts()
-
-            status_text.info(
-                f"🔄 Procesando: Frame {frame_idx + 1}/{st.session_state.total_frames}"
-            )
-
-            frame_idx += 1
-            frames_processed += 1
-
-            # Playback speed delay
-            elapsed = time.time() - start_time
-            time.sleep(max(0, frame_delay - elapsed))
-
-        video_proc.release()
-        st.session_state.frame_idx = frame_idx
-
-        # Update chart after batch
-    
-
-        if finished:
+        except Exception as e:
+            status_text.error(f"❌ Error: {str(e)}")
+            st.exception(e)
             st.session_state.processing = False
-            st.session_state.processed = True
-            status_text.success("✅ ¡Monitoreo completado!")
-            progress_bar.progress(1.0)
-            with metric_temp:
-                st.metric("🌡️ Temp. Máxima", f"{st.session_state.max_temp_overall:.1f}°C")
-            with metric_detections:
-                st.metric("🎯 Objetos Únicos", st.session_state.total_count)
-            with metric_progress:
-                st.metric("📊 Total Alertas", len(st.session_state.detections_log))
-        else:
-            # Continue processing on next rerun
-            st.rerun()
 
-    except Exception as e:
-        status_text.error(f"❌ Error: {str(e)}")
-        st.exception(e)
-        st.session_state.processing = False
 
-# --- Results summary ---
+# --- Render the fragment ---
+monitoring_display()
+
+# --- Results summary (outside fragment — only renders on full page rerun) ---
 if st.session_state.processed and not st.session_state.processing:
     st.markdown("---")
     st.markdown("### 📈 Resumen de Resultados")
@@ -557,15 +567,29 @@ if st.session_state.processed and not st.session_state.processing:
             ):
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    st.write(f"**Primera detección:** Frame {obj_info['first_seen_frame']}")
-                    st.write(f"**Última detección:** Frame {obj_info['last_seen_frame']}")
+                    st.write(
+                        f"**Primera detección:** Frame {obj_info['first_seen_frame']}"
+                    )
+                    st.write(
+                        f"**Última detección:** Frame {obj_info['last_seen_frame']}"
+                    )
                 with c2:
-                    dur = obj_info["last_seen_frame"] - obj_info["first_seen_frame"] + 1
+                    dur = (
+                        obj_info["last_seen_frame"]
+                        - obj_info["first_seen_frame"]
+                        + 1
+                    )
                     st.write(f"**Duración:** {dur} frames")
-                    st.write(f"**Detecciones:** {obj_info['total_detections']} veces")
+                    st.write(
+                        f"**Detecciones:** {obj_info['total_detections']} veces"
+                    )
                 with c3:
-                    st.write(f"**Temp. máxima:** {obj_info['max_temperature']:.1f}°C")
-                    st.write(f"**Temp. media:** {obj_info['mean_temperature']:.1f}°C")
+                    st.write(
+                        f"**Temp. máxima:** {obj_info['max_temperature']:.1f}°C"
+                    )
+                    st.write(
+                        f"**Temp. media:** {obj_info['mean_temperature']:.1f}°C"
+                    )
 
     # Export
     if st.session_state.detections_log or st.session_state.tracked_objects:
@@ -579,8 +603,12 @@ if st.session_state.processed and not st.session_state.processing:
                 "metadata": {
                     "date": datetime.now().isoformat(),
                     "video": selected_video,
-                    "threshold": st.session_state.get("cfg_threshold", temp_threshold),
-                    "critical_threshold": st.session_state.get("cfg_critical", critical_threshold),
+                    "threshold": st.session_state.get(
+                        "cfg_threshold", temp_threshold
+                    ),
+                    "critical_threshold": st.session_state.get(
+                        "cfg_critical", critical_threshold
+                    ),
                     "total_frames": st.session_state.frame_idx,
                     "total_objects": total_objects,
                     "total_alerts": total_alerts,
