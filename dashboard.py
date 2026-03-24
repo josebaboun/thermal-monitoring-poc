@@ -349,6 +349,7 @@ def monitoring_display():
         temps = [s["temp"] for s in sampled]
 
         fig, ax = plt.subplots(figsize=(6, 2.2))
+        ax.set_title("Temperatura máxima por momento", fontsize=9, fontweight="bold")
         ax.plot(times, temps, color="#FF4B4B", linewidth=1.5)
         ax.fill_between(times, temps, alpha=0.15, color="#FF4B4B")
         ax.set_xlabel("Tiempo (s)", fontsize=8)
