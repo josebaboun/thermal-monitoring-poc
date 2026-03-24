@@ -5,6 +5,7 @@ import io as _io
 import json
 import os
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -115,17 +116,48 @@ st.sidebar.header("⚙️ Configuración")
 config_path = Path(__file__).parent / "config" / "config.yaml"
 config = Config.load(str(config_path))
 
-# Video selection
-video_files = list(Path(__file__).parent.glob("data/input/*.mp4"))
-if video_files:
-    video_names = [v.name for v in video_files]
-    selected_video = st.sidebar.selectbox(
-        "Seleccionar video", video_names, index=0,
+# Video source: existing files or upload
+video_source = st.sidebar.radio(
+    "Origen del video",
+    ["📁 Videos existentes", "📤 Subir video"],
+    disabled=st.session_state.processing,
+)
+
+if video_source == "📁 Videos existentes":
+    video_files = list(Path(__file__).parent.glob("data/input/*.mp4"))
+    if video_files:
+        video_names = [v.name for v in video_files]
+        selected_video = st.sidebar.selectbox(
+            "Seleccionar video", video_names, index=0,
+            disabled=st.session_state.processing,
+        )
+        video_path = Path(__file__).parent / "data" / "input" / selected_video
+    else:
+        st.sidebar.warning("No se encontraron videos en data/input/")
+        video_path = None
+else:
+    uploaded_file = st.sidebar.file_uploader(
+        "Arrastra o selecciona un video",
+        type=["mp4", "avi", "mov"],
         disabled=st.session_state.processing,
     )
-    video_path = Path(__file__).parent / "data" / "input" / selected_video
-else:
-    st.sidebar.error("No se encontraron videos en data/input/")
+    if uploaded_file is not None:
+        # Save uploaded file to a temp location
+        if "uploaded_video_path" not in st.session_state or st.session_state.get("uploaded_video_name") != uploaded_file.name:
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+            tmp.write(uploaded_file.read())
+            tmp.close()
+            st.session_state.uploaded_video_path = tmp.name
+            st.session_state.uploaded_video_name = uploaded_file.name
+        video_path = st.session_state.uploaded_video_path
+        selected_video = uploaded_file.name
+        st.sidebar.success(f"✅ {uploaded_file.name}")
+    else:
+        video_path = None
+        selected_video = None
+
+if video_path is None:
+    st.sidebar.info("Selecciona o sube un video para comenzar.")
     st.stop()
 
 # Temperature range
