@@ -387,7 +387,7 @@ def _generate_pdf_report(
 
             pdf.ln(3)
 
-    return pdf.output()
+    return bytes(pdf.output())
 
 
 # =====================================================================
