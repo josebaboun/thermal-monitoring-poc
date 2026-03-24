@@ -190,12 +190,6 @@ min_area = st.sidebar.slider(
     disabled=st.session_state.processing,
 )
 
-# Playback speed
-playback_speed = st.sidebar.slider(
-    "Velocidad de Reproducción", min_value=0.25, max_value=4.0,
-    value=1.0, step=0.25,
-)
-
 # Frames per batch — higher = smoother (fragment reruns are lightweight)
 FRAMES_PER_BATCH = 30
 
@@ -308,10 +302,18 @@ def monitoring_display():
         alerts_placeholder.markdown(html, unsafe_allow_html=True)
 
     def _show_frame(frame_rgb):
+        # Upscale small frames so they fill the column
+        h, w = frame_rgb.shape[:2]
+        if w < 480:
+            scale = 480 // w + 1
+            frame_rgb = cv2.resize(
+                frame_rgb, (w * scale, h * scale),
+                interpolation=cv2.INTER_NEAREST,
+            )
         _, buf = cv2.imencode(
             ".jpg",
             cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR),
-            [cv2.IMWRITE_JPEG_QUALITY, 85],
+            [cv2.IMWRITE_JPEG_QUALITY, 90],
         )
         b64 = base64.b64encode(buf.tobytes()).decode()
         html = f'<img src="data:image/jpeg;base64,{b64}" style="width:100%;border-radius:8px;">'
@@ -416,10 +418,6 @@ def monitoring_display():
             if frame_idx > 0:
                 video_proc.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
 
-            # Calculate timing
-            target_fps = fps * playback_speed
-            frame_delay = 1.0 / target_fps if target_fps > 0 else 0.04
-
             frames_processed = 0
             finished = False
 
@@ -428,8 +426,6 @@ def monitoring_display():
                 if not ret:
                     finished = True
                     break
-
-                start_time = time.time()
 
                 temp_frame = temp_extractor.extract_from_rgb(frame)
                 detections, hot_mask = detector.detect(temp_frame)
@@ -514,7 +510,9 @@ def monitoring_display():
                 )
 
                 _update_metrics()
-                _render_chart()
+                # Render chart every 10 frames (matplotlib is expensive)
+                if frames_processed % 10 == 0 or frames_processed == FRAMES_PER_BATCH - 1:
+                    _render_chart()
                 _render_alerts()
 
                 status_text.info(
@@ -523,10 +521,6 @@ def monitoring_display():
 
                 frame_idx += 1
                 frames_processed += 1
-
-                # Playback speed delay
-                elapsed = time.time() - start_time
-                time.sleep(max(0, frame_delay - elapsed))
 
             video_proc.release()
             st.session_state.frame_idx = frame_idx
