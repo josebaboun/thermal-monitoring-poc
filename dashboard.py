@@ -199,7 +199,7 @@ telegram_enabled = st.sidebar.toggle(
 )
 
 # Frames per batch — higher = smoother (fragment reruns are lightweight)
-FRAMES_PER_BATCH = 30
+FRAMES_PER_BATCH = 60
 
 # --- Control buttons ---
 st.sidebar.markdown("---")
@@ -280,7 +280,8 @@ def monitoring_display():
             metric_detections = st.empty()
         metric_progress = st.empty()
 
-        # Temperature chart placeholder
+        # Temperature chart
+        st.markdown("#### 🌡️ Temperatura máxima por momento")
         chart_placeholder = st.empty()
 
         st.markdown("---")
@@ -358,7 +359,6 @@ def monitoring_display():
         temps = [s["temp"] for s in sampled]
 
         fig, ax = plt.subplots(figsize=(6, 2.2))
-        ax.set_title("Temperatura máxima por momento", fontsize=9, fontweight="bold")
         ax.plot(times, temps, color="#FF4B4B", linewidth=1.5)
         ax.fill_between(times, temps, alpha=0.15, color="#FF4B4B")
         ax.set_xlabel("Tiempo (s)", fontsize=8)
