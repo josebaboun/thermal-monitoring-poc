@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
 from dotenv import load_dotenv
+from fpdf import FPDF
 
 # Load .env
 load_dotenv(Path(__file__).parent / ".env")
@@ -98,6 +99,7 @@ _defaults = {
     "total_count": 0,
     "telegram_sent": False,
     "temp_history": [],
+    "video_fps": 25.0,
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
@@ -198,6 +200,14 @@ telegram_enabled = st.sidebar.toggle(
     disabled=st.session_state.processing,
 )
 
+# Belt inspection speed (Feature 4)
+st.sidebar.markdown("#### 🚂 Simulacion de Posicion")
+belt_speed_kmh = st.sidebar.number_input(
+    "Velocidad del carro (km/h)", min_value=0.1, max_value=20.0,
+    value=2.0, step=0.1,
+    disabled=st.session_state.processing,
+)
+
 # Frames per batch — higher = smoother (fragment reruns are lightweight)
 FRAMES_PER_BATCH = 60
 
@@ -228,6 +238,7 @@ if not st.session_state.processing:
         st.session_state.cfg_temp_max = temp_range_max
         st.session_state.cfg_video = str(video_path)
         st.session_state.cfg_telegram = telegram_enabled
+        st.session_state.cfg_belt_speed = belt_speed_kmh
         st.rerun()
 else:
     col_pause, col_stop = st.sidebar.columns(2)
@@ -256,6 +267,129 @@ Detecta automáticamente objetos sobrecalentados en videos termográficos.
 """)
 
 
+# --- Helper: generate thumbnail from BGR frame ---
+def _frame_to_thumbnail_b64(frame_bgr, max_size=120):
+    h, w = frame_bgr.shape[:2]
+    scale = max_size / max(h, w)
+    thumb = cv2.resize(frame_bgr, (int(w * scale), int(h * scale)),
+                       interpolation=cv2.INTER_AREA)
+    _, buf = cv2.imencode(".jpg", thumb, [cv2.IMWRITE_JPEG_QUALITY, 60])
+    return base64.b64encode(buf.tobytes()).decode()
+
+
+# --- Helper: generate PDF report ---
+def _generate_pdf_report(
+    video_name, total_frames, total_objects, total_alerts, critical_count,
+    max_temp, threshold, critical_threshold, tracked_objects, detections_log,
+    temp_history, video_fps, belt_speed,
+):
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # Title
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.cell(0, 15, "Reporte de Monitoreo Termico", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 8, f"Video: {video_name}", new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.cell(0, 8, f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+             new_x="LMARGIN", new_y="NEXT", align="C")
+    pdf.ln(5)
+
+    # Summary
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.cell(0, 10, "Resumen", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 11)
+    pdf.cell(0, 7, f"Total Frames: {total_frames}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 7, f"Objetos Unicos: {total_objects}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 7, f"Total Alertas: {total_alerts}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 7, f"Alertas Criticas: {critical_count}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 7, f"Temperatura Maxima: {max_temp:.1f} C", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 7, f"Umbral Alerta: {threshold:.1f} C | Umbral Critico: {critical_threshold:.1f} C",
+             new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(5)
+
+    # Temperature chart
+    if len(temp_history) >= 2:
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.cell(0, 10, "Temperatura Maxima por Momento", new_x="LMARGIN", new_y="NEXT")
+
+        step = max(1, len(temp_history) // 200)
+        sampled = temp_history[::step]
+        times = [s["time"] for s in sampled]
+        temps = [s["temp"] for s in sampled]
+
+        fig, ax = plt.subplots(figsize=(7, 3))
+        ax.plot(times, temps, color="#FF4B4B", linewidth=1.5)
+        ax.fill_between(times, temps, alpha=0.15, color="#FF4B4B")
+        ax.set_xlabel("Tiempo (s)")
+        ax.set_ylabel("Temp C")
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+
+        buf = _io.BytesIO()
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        buf.seek(0)
+        pdf.image(buf, x=15, w=180)
+        pdf.ln(5)
+
+    # Detected objects table
+    if tracked_objects:
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.cell(0, 10, "Objetos Detectados", new_x="LMARGIN", new_y="NEXT")
+
+        pdf.set_font("Helvetica", "B", 9)
+        col_widths = [15, 30, 30, 30, 25, 25, 35]
+        headers = ["ID", "Temp Max", "Severidad", "Frames", "Duracion", "Detecciones", "Posicion"]
+        for i, h in enumerate(headers):
+            pdf.cell(col_widths[i], 8, h, border=1, align="C")
+        pdf.ln()
+
+        pdf.set_font("Helvetica", "", 9)
+        for oid, info in tracked_objects.items():
+            dur = info["last_seen_frame"] - info["first_seen_frame"] + 1
+            pos_first = (info["first_seen_frame"] / video_fps) * (belt_speed / 3600) if video_fps > 0 else 0
+            pdf.cell(col_widths[0], 7, str(oid), border=1, align="C")
+            pdf.cell(col_widths[1], 7, f"{info['max_temperature']:.1f} C", border=1, align="C")
+            pdf.cell(col_widths[2], 7, info["severity"].upper(), border=1, align="C")
+            pdf.cell(col_widths[3], 7, f"{info['first_seen_frame']}-{info['last_seen_frame']}", border=1, align="C")
+            pdf.cell(col_widths[4], 7, f"{dur} frames", border=1, align="C")
+            pdf.cell(col_widths[5], 7, str(info["total_detections"]), border=1, align="C")
+            pdf.cell(col_widths[6], 7, f"Km {pos_first:.2f}", border=1, align="C")
+            pdf.ln()
+        pdf.ln(5)
+
+    # Alert list with thumbnails
+    if detections_log:
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.cell(0, 10, "Listado de Alertas", new_x="LMARGIN", new_y="NEXT")
+
+        for alert in detections_log:
+            pdf.set_font("Helvetica", "B", 10)
+            sev_label = "CRITICO" if alert["severity"] == "critical" else "ADVERTENCIA"
+            pdf.cell(0, 7, f"Objeto #{alert['object_id']} - {sev_label}",
+                     new_x="LMARGIN", new_y="NEXT")
+
+            pdf.set_font("Helvetica", "", 9)
+            pos = alert.get("position_km", 0.0)
+            pdf.cell(0, 6, f"Frame: {alert['frame']} | Tiempo: {alert['timestamp']} | "
+                           f"Temp: {alert['max_temp']:.1f} C | Posicion: Km {pos:.2f}",
+                     new_x="LMARGIN", new_y="NEXT")
+
+            if "frame_b64" in alert:
+                try:
+                    img_bytes = base64.b64decode(alert["frame_b64"])
+                    img_buf = _io.BytesIO(img_bytes)
+                    pdf.image(img_buf, w=40)
+                except Exception:
+                    pass
+
+            pdf.ln(3)
+
+    return pdf.output()
+
+
 # =====================================================================
 # Fragment: all dynamic content (video, metrics, chart, alerts)
 # Only this section reruns between batches — sidebar & header stay stable.
@@ -273,6 +407,10 @@ def monitoring_display():
 
     with col2:
         st.markdown("### 📊 Métricas")
+
+        # Traffic light indicator (Feature 6)
+        traffic_light_placeholder = st.empty()
+
         col2_1, col2_2 = st.columns(2)
         with col2_1:
             metric_temp = st.empty()
@@ -292,6 +430,25 @@ def monitoring_display():
         alerts_placeholder = st.empty()
 
     # --- Helpers ---
+    def _render_traffic_light():
+        t = st.session_state.current_max_temp
+        cfg_crit = st.session_state.get("cfg_critical", 50.0)
+        if t >= cfg_crit:
+            color, label = "#dc3545", "CRITICO"
+        elif t > 0:
+            color, label = "#ffc107", "ADVERTENCIA"
+        else:
+            color, label = "#28a745", "NORMAL"
+        html = f'''
+        <div style="text-align:center;margin-bottom:0.8rem;">
+            <div style="display:inline-block;width:60px;height:60px;border-radius:50%;
+                        background-color:{color};border:3px solid #333;
+                        box-shadow:0 0 20px {color};"></div>
+            <p style="font-weight:bold;color:{color};margin-top:0.3rem;font-size:1.1rem;">{label}</p>
+        </div>
+        '''
+        traffic_light_placeholder.markdown(html, unsafe_allow_html=True)
+
     def _render_alerts():
         if not st.session_state.detections_log:
             return
@@ -301,12 +458,21 @@ def monitoring_display():
             cls = "critical-alert" if alert["severity"] == "critical" else "warning-alert"
             icon = "🔴" if alert["severity"] == "critical" else "🟡"
             bbox = alert.get("bbox", (0, 0, 0, 0))
+            pos = alert.get("position_km", 0.0)
+            # Thumbnail (Feature 3)
+            thumb_html = ""
+            if "frame_b64" in alert:
+                thumb_html = (
+                    f'<img src="data:image/jpeg;base64,{alert["frame_b64"]}" '
+                    f'style="width:90px;border-radius:4px;float:right;margin-left:8px;">'
+                )
             html += f"""
             <div class="{cls}">
-                {icon} <strong>NUEVO OBJETO DETECTADO</strong><br>
+                {thumb_html}
+                {icon} <strong>OBJETO DETECTADO</strong><br>
                 ID: #{alert["object_id"]} | Frame {alert["frame"]} - {alert["timestamp"]}<br>
                 Temperatura: {alert["max_temp"]:.1f}°C<br>
-                Posición: ({bbox[0]}, {bbox[1]}) | Tamaño: {bbox[2]}x{bbox[3]}px
+                Posicion: Km {pos:.2f} | Tamaño: {bbox[2]}x{bbox[3]}px
             </div>
             """
         alerts_placeholder.markdown(html, unsafe_allow_html=True)
@@ -387,6 +553,7 @@ def monitoring_display():
             progress_bar.progress(
                 min(st.session_state.frame_idx / st.session_state.total_frames, 1.0)
             )
+        _render_traffic_light()
         _update_metrics()
         _render_chart()
         _render_alerts()
@@ -422,12 +589,14 @@ def monitoring_display():
             video_info = video_proc.get_video_info()
             st.session_state.total_frames = video_info["total_frames"]
             fps = video_info["fps"]
+            st.session_state.video_fps = fps
 
             # Seek to current frame position
             frame_idx = st.session_state.frame_idx
             if frame_idx > 0:
                 video_proc.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
 
+            belt_speed = st.session_state.get("cfg_belt_speed", 2.0)
             frames_processed = 0
             finished = False
 
@@ -478,6 +647,9 @@ def monitoring_display():
                 else:
                     frame_timestamp = "00:00.000"
 
+                # Compute belt position (Feature 4)
+                position_km = (frame_idx / fps) * (belt_speed / 3600) if fps > 0 else 0.0
+
                 # Render frame with overlays (no timestamp overlay)
                 output_frame = renderer.render(
                     frame, temp_frame, detections, timestamp=""
@@ -487,6 +659,8 @@ def monitoring_display():
                     for obj_id, obj_info in new_objects.items():
                         bbox = obj_info["bbox"]
                         timestamp = frame_timestamp
+                        # Capture thumbnail (Feature 3)
+                        frame_b64_thumb = _frame_to_thumbnail_b64(output_frame)
                         st.session_state.detections_log.append({
                             "object_id": obj_id,
                             "frame": frame_idx,
@@ -495,6 +669,8 @@ def monitoring_display():
                             "severity": obj_info["severity"],
                             "bbox": bbox,
                             "type": "new_object",
+                            "position_km": position_km,
+                            "frame_b64": frame_b64_thumb,
                         })
                         st.session_state.last_object_id = obj_id
 
@@ -528,6 +704,7 @@ def monitoring_display():
                     (frame_idx + 1) / st.session_state.total_frames
                 )
 
+                _render_traffic_light()
                 _update_metrics()
                 # Render chart every 10 frames (matplotlib is expensive)
                 if frames_processed % 10 == 0 or frames_processed == FRAMES_PER_BATCH - 1:
@@ -605,11 +782,26 @@ if st.session_state.processed and not st.session_state.processing:
         st.markdown("---")
         st.markdown("### 🔍 Detalles de Objetos Detectados")
 
+        fps_val = st.session_state.get("video_fps", 25)
+        speed = st.session_state.get("cfg_belt_speed", 2.0)
+
         for obj_id, obj_info in st.session_state.tracked_objects.items():
             with st.expander(
                 f"📦 Objeto #{obj_id} - {obj_info['max_temperature']:.1f}°C "
                 f"({obj_info['severity'].upper()})"
             ):
+                # Show thumbnail if available (Feature 3)
+                det_entry = next(
+                    (d for d in st.session_state.detections_log if d["object_id"] == obj_id),
+                    None,
+                )
+                if det_entry and "frame_b64" in det_entry:
+                    st.markdown(
+                        f'<img src="data:image/jpeg;base64,{det_entry["frame_b64"]}" '
+                        f'style="width:150px;border-radius:4px;margin-bottom:8px;">',
+                        unsafe_allow_html=True,
+                    )
+
                 c1, c2, c3 = st.columns(3)
                 with c1:
                     st.write(
@@ -635,13 +827,17 @@ if st.session_state.processed and not st.session_state.processing:
                     st.write(
                         f"**Temp. media:** {obj_info['mean_temperature']:.1f}°C"
                     )
+                    # Belt position (Feature 4)
+                    pos_first = (obj_info["first_seen_frame"] / fps_val) * (speed / 3600) if fps_val > 0 else 0
+                    pos_last = (obj_info["last_seen_frame"] / fps_val) * (speed / 3600) if fps_val > 0 else 0
+                    st.write(f"**Posición:** Km {pos_first:.2f} - Km {pos_last:.2f}")
 
     # Export
     if st.session_state.detections_log or st.session_state.tracked_objects:
         st.markdown("---")
         st.markdown("### 💾 Exportar Resultados")
 
-        exp1, exp2 = st.columns(2)
+        exp1, exp2, exp3 = st.columns(3)
 
         with exp1:
             report_data = {
@@ -662,10 +858,13 @@ if st.session_state.processed and not st.session_state.processing:
                     {"object_id": oid, **info}
                     for oid, info in st.session_state.tracked_objects.items()
                 ],
-                "alerts": st.session_state.detections_log,
+                "alerts": [
+                    {k: v for k, v in d.items() if k != "frame_b64"}
+                    for d in st.session_state.detections_log
+                ],
             }
             st.download_button(
-                label="📥 Descargar Reporte JSON",
+                label="📥 Descargar JSON",
                 data=json.dumps(report_data, indent=2),
                 file_name=f"thermal_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                 mime="application/json",
@@ -673,32 +872,56 @@ if st.session_state.processed and not st.session_state.processing:
             )
 
         with exp2:
-            txt = f"""REPORTE DE MONITOREO TÉRMICO
+            txt = f"""REPORTE DE MONITOREO TERMICO
 Fecha: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 Video: {selected_video}
 
 === RESUMEN ===
 Total Frames: {st.session_state.frame_idx}
-Objetos Únicos: {total_objects}
+Objetos Unicos: {total_objects}
 Alertas: {total_alerts}
-Alertas Críticas: {critical_count}
-Temp. Máxima: {max_temp:.1f}°C
+Alertas Criticas: {critical_count}
+Temp. Maxima: {max_temp:.1f} C
 
 === OBJETOS DETECTADOS ===
 """
             for oid, info in st.session_state.tracked_objects.items():
                 dur = info["last_seen_frame"] - info["first_seen_frame"] + 1
                 txt += f"\nObjeto #{oid}:"
-                txt += f"\n  Temp. Máxima: {info['max_temperature']:.1f}°C"
+                txt += f"\n  Temp. Maxima: {info['max_temperature']:.1f} C"
                 txt += f"\n  Severidad: {info['severity'].upper()}"
                 txt += f"\n  Frames: {info['first_seen_frame']}-{info['last_seen_frame']} ({dur} frames)"
                 txt += f"\n  Detecciones: {info['total_detections']}\n"
 
             st.download_button(
-                label="📄 Descargar Resumen TXT",
+                label="📄 Descargar TXT",
                 data=txt,
                 file_name=f"thermal_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
                 mime="text/plain",
+                use_container_width=True,
+            )
+
+        with exp3:
+            pdf_bytes = _generate_pdf_report(
+                video_name=selected_video,
+                total_frames=st.session_state.frame_idx,
+                total_objects=total_objects,
+                total_alerts=total_alerts,
+                critical_count=critical_count,
+                max_temp=max_temp,
+                threshold=st.session_state.get("cfg_threshold", temp_threshold),
+                critical_threshold=st.session_state.get("cfg_critical", critical_threshold),
+                tracked_objects=st.session_state.tracked_objects,
+                detections_log=st.session_state.detections_log,
+                temp_history=st.session_state.temp_history,
+                video_fps=st.session_state.get("video_fps", 25),
+                belt_speed=st.session_state.get("cfg_belt_speed", 2.0),
+            )
+            st.download_button(
+                label="📕 Descargar PDF",
+                data=pdf_bytes,
+                file_name=f"thermal_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                mime="application/pdf",
                 use_container_width=True,
             )
 
