@@ -236,17 +236,35 @@ with col2:
         metric_detections = st.empty()
     metric_progress = st.empty()
 
-    # Temperature chart - render directly from session state (no placeholder)
+    # Temperature chart - rendered with matplotlib (avoids altair/Python 3.14 issues)
     if len(st.session_state.temp_history) >= 2:
-        import pandas as pd
+        import matplotlib.pyplot as plt
+        import io as _io
         st.markdown("#### 🌡️ Temperatura Máxima")
         history = st.session_state.temp_history
         step = max(1, len(history) // 200)
         sampled = history[::step]
-        df = pd.DataFrame({"Temp °C": [s["temp"] for s in sampled]},
-                          index=[round(s["time"], 1) for s in sampled])
-        df.index.name = "Tiempo (s)"
-        st.line_chart(df, height=180)
+        times = [s["time"] for s in sampled]
+        temps = [s["temp"] for s in sampled]
+
+        fig, ax = plt.subplots(figsize=(6, 2.2))
+        ax.plot(times, temps, color="#FF4B4B", linewidth=1.5)
+        ax.fill_between(times, temps, alpha=0.15, color="#FF4B4B")
+        ax.set_xlabel("Tiempo (s)", fontsize=8)
+        ax.set_ylabel("Temp °C", fontsize=8)
+        ax.tick_params(labelsize=7)
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+
+        buf = _io.BytesIO()
+        fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
+        plt.close(fig)
+        buf.seek(0)
+        chart_b64 = base64.b64encode(buf.read()).decode()
+        st.markdown(
+            f'<img src="data:image/png;base64,{chart_b64}" style="width:100%;">',
+            unsafe_allow_html=True,
+        )
 
     st.markdown("---")
     st.markdown(
