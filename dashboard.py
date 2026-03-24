@@ -1,5 +1,6 @@
 """Interactive Streamlit dashboard for thermal monitoring demo."""
 
+import base64
 import json
 import os
 import sys
@@ -276,10 +277,14 @@ def _render_alerts():
     alerts_placeholder.markdown(html, unsafe_allow_html=True)
 
 
-# --- Helper: convert frame to JPEG bytes (avoids Streamlit media file errors) ---
-def _frame_to_bytes(frame_rgb):
-    _, buf = cv2.imencode(".jpg", cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 90])
-    return buf.tobytes()
+# --- Helper: render frame as base64 HTML (avoids Streamlit media file errors) ---
+def _show_frame(placeholder, frame_rgb):
+    _, buf = cv2.imencode(".jpg", cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR),
+                          [cv2.IMWRITE_JPEG_QUALITY, 85])
+    b64 = base64.b64encode(buf.tobytes()).decode()
+    html = f'<img src="data:image/jpeg;base64,{b64}" style="width:100%;border-radius:8px;">'
+    placeholder.markdown(html, unsafe_allow_html=True)
+    return b64
 
 
 # --- Helper: update metrics ---
@@ -304,7 +309,10 @@ def _update_metrics():
 
 # --- Show last frame if paused or between reruns ---
 if st.session_state.last_frame_rgb is not None:
-    video_placeholder.image(st.session_state.last_frame_rgb, use_container_width=True)
+    video_placeholder.markdown(
+        f'<img src="data:image/jpeg;base64,{st.session_state.last_frame_rgb}" style="width:100%;border-radius:8px;">',
+        unsafe_allow_html=True,
+    )
     if st.session_state.total_frames > 0:
         progress_bar.progress(st.session_state.frame_idx / st.session_state.total_frames)
     _update_metrics()
@@ -449,10 +457,8 @@ if st.session_state.processing and not st.session_state.paused:
             st.session_state.total_count = total
 
             frame_rgb = cv2.cvtColor(output_frame, cv2.COLOR_BGR2RGB)
-            frame_bytes = _frame_to_bytes(frame_rgb)
-            st.session_state.last_frame_rgb = frame_bytes
-
-            video_placeholder.image(frame_bytes, use_container_width=True)
+            b64 = _show_frame(video_placeholder, frame_rgb)
+            st.session_state.last_frame_rgb = b64
             progress_bar.progress((frame_idx + 1) / st.session_state.total_frames)
 
             _update_metrics()
