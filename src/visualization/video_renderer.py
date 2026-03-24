@@ -42,7 +42,7 @@ class VideoRenderer:
             output_frame = self._draw_detections(output_frame, detections)
 
         # Draw timestamp
-        if self.show_timestamp:
+        if self.show_timestamp and timestamp:
             output_frame = self._draw_timestamp(output_frame, timestamp)
 
         # Draw detection count

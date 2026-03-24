@@ -469,15 +469,24 @@ def monitoring_display():
                     "temp": chart_temp,
                 })
 
-                # Render frame with overlays
+                # Compute timestamp from frame index (consistent across batches)
+                if fps > 0:
+                    _secs = frame_idx / fps
+                    _m, _s = int(_secs // 60), int(_secs % 60)
+                    _ms = int((_secs % 1) * 1000)
+                    frame_timestamp = f"{_m:02d}:{_s:02d}.{_ms:03d}"
+                else:
+                    frame_timestamp = "00:00.000"
+
+                # Render frame with overlays (no timestamp overlay)
                 output_frame = renderer.render(
-                    frame, temp_frame, detections, timestamp=video_proc.get_timestamp()
+                    frame, temp_frame, detections, timestamp=""
                 )
 
                 if new_objects:
                     for obj_id, obj_info in new_objects.items():
                         bbox = obj_info["bbox"]
-                        timestamp = video_proc.get_timestamp()
+                        timestamp = frame_timestamp
                         st.session_state.detections_log.append({
                             "object_id": obj_id,
                             "frame": frame_idx,
