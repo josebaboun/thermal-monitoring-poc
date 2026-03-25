@@ -196,7 +196,7 @@ min_area = st.sidebar.slider(
 st.sidebar.markdown("#### 📲 Alertas Telegram")
 telegram_enabled = st.sidebar.toggle(
     "Enviar alertas por Telegram",
-    value=True,
+    value=False,
     disabled=st.session_state.processing,
 )
 
@@ -206,6 +206,12 @@ belt_speed_kmh = st.sidebar.number_input(
     "Velocidad del carro (km/h)", min_value=0.1, max_value=20.0,
     value=2.0, step=0.1,
     disabled=st.session_state.processing,
+)
+
+# Playback speed
+playback_speed = st.sidebar.slider(
+    "Velocidad de Reproducción", min_value=0.5, max_value=4.0,
+    value=2.0, step=0.5,
 )
 
 # Frames per batch — higher = smoother (fragment reruns are lightweight)
@@ -597,6 +603,8 @@ def monitoring_display():
                 video_proc.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
 
             belt_speed = st.session_state.get("cfg_belt_speed", 2.0)
+            target_fps = fps * playback_speed
+            frame_delay = 1.0 / target_fps if target_fps > 0 else 0.04
             frames_processed = 0
             finished = False
 
@@ -605,6 +613,8 @@ def monitoring_display():
                 if not ret:
                     finished = True
                     break
+
+                frame_start = time.time()
 
                 temp_frame = temp_extractor.extract_from_rgb(frame)
                 detections, hot_mask = detector.detect(temp_frame)
@@ -717,6 +727,10 @@ def monitoring_display():
 
                 frame_idx += 1
                 frames_processed += 1
+
+                # Playback speed delay
+                elapsed = time.time() - frame_start
+                time.sleep(max(0, frame_delay - elapsed))
 
             video_proc.release()
             st.session_state.frame_idx = frame_idx
