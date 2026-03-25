@@ -8,9 +8,9 @@ video:
   fps: 30
 
 detection:
-  temperature_threshold: 40.0    # °C - umbral de alerta
-  critical_threshold: 50.0       # °C - umbral crítico (muy caliente)
-  min_detection_area: 200        # píxeles mínimos (evita ruido y detecciones pequeñas)
+  temperature_threshold: 50.0    # °C - umbral de alerta
+  critical_threshold: 60.0       # °C - umbral crítico (muy caliente)
+  min_detection_area: 300        # píxeles mínimos (evita ruido y detecciones pequeñas)
   cooldown_seconds: 5            # tiempo entre alertas del mismo objeto
 
 tracking:
@@ -21,8 +21,8 @@ tracking:
 thermal:
   colormap: "rainbow"            # rainbow (como el video exportado)
   # Rango para mapeo RGB -> temperatura (debe coincidir con el rango manual de la cámara)
-  temp_range_min: 25             # °C (mínimo configurado en la cámara)
-  temp_range_max: 60             # °C (máximo configurado en la cámara)
+  temp_range_min: 15             # °C (mínimo configurado en la cámara)
+  temp_range_max: 70             # °C (máximo configurado en la cámara)
 
 alerts:
   enabled: false                 # Deshabilitado por ahora
