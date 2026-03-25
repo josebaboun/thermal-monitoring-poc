@@ -38,7 +38,8 @@ def main():
     tracker = ThermalObjectTracker(
         max_disappeared=config.get('tracking.max_disappeared', 75),
         max_distance=config.get('tracking.max_distance', 150.0),
-        min_confirm_frames=config.get('tracking.min_confirm_frames', 5)
+        min_confirm_frames=config.get('tracking.min_confirm_frames', 5),
+        critical_threshold=config.get('detection.critical_threshold', 60.0)
     )
     renderer = VideoRenderer(config.visualization)
 

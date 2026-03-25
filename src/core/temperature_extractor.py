@@ -35,7 +35,10 @@ class TemperatureExtractor:
         """
         h, w = frame_rgb.shape[:2]
 
-        hsv = cv2.cvtColor(frame_rgb, cv2.COLOR_BGR2HSV)
+        # Smooth compression artifacts before color analysis
+        blurred = cv2.GaussianBlur(frame_rgb, (5, 5), 0)
+
+        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
         hue = hsv[:, :, 0].astype(np.float32)       # 0-179
         sat = hsv[:, :, 1].astype(np.float32)       # 0-255
         val = hsv[:, :, 2].astype(np.float32)       # 0-255
@@ -45,8 +48,8 @@ class TemperatureExtractor:
         hue_clamped = np.clip(hue, 0, 120)
         normalized = 1.0 - (hue_clamped / 120.0)
 
-        # For low-saturation bright pixels (near white): very hot
-        white_mask = (sat < 60) & (val > 200)
+        # For clearly white pixels (very low saturation, very bright): very hot
+        white_mask = (sat < 25) & (val > 230)
         normalized[white_mask] = 1.0
 
         # For dark pixels (near black): cold / background

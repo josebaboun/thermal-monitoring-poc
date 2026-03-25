@@ -32,7 +32,7 @@ class ThermalObjectTracker:
     """Tracks thermal objects across frames to avoid duplicate alerts."""
 
     def __init__(self, max_disappeared: int = 75, max_distance: float = 150.0,
-                 min_confirm_frames: int = 5):
+                 min_confirm_frames: int = 5, critical_threshold: float = 60.0):
         self.next_object_id = 0
         self.objects = OrderedDict()       # {object_id: centroid}
         self.bboxes = OrderedDict()        # {object_id: bbox}
@@ -43,6 +43,7 @@ class ThermalObjectTracker:
         self.max_disappeared = max_disappeared
         self.max_distance = max_distance
         self.min_confirm_frames = min_confirm_frames
+        self.critical_threshold = critical_threshold
 
     def register(self, centroid: Tuple[int, int], detection: Dict, frame: int) -> int:
         """Register a new object."""
@@ -55,6 +56,7 @@ class ThermalObjectTracker:
             'last_seen_frame': frame,
             'max_temperature': detection['max_temperature'],
             'mean_temperature': detection['mean_temperature'],
+            '_temp_sum': detection['max_temperature'],
             'severity': detection['severity'],
             'bbox': detection['bbox'],
             'total_detections': 1
@@ -147,9 +149,14 @@ class ThermalObjectTracker:
             info['last_seen_frame'] = frame
             info['total_detections'] += 1
 
-            if detections[col]['max_temperature'] > info['max_temperature']:
-                info['max_temperature'] = detections[col]['max_temperature']
-                info['severity'] = detections[col]['severity']
+            # Track running average temperature for robust severity
+            det_temp = detections[col]['max_temperature']
+            info['_temp_sum'] += det_temp
+            avg_temp = info['_temp_sum'] / info['total_detections']
+            info['max_temperature'] = avg_temp
+            info['severity'] = detections[col]['severity'] if avg_temp <= info['max_temperature'] else info['severity']
+            # Re-evaluate severity based on average temperature
+            info['severity'] = 'critical' if avg_temp > self.critical_threshold else 'warning'
 
             info['bbox'] = detections[col]['bbox']
             matched_objects[object_id] = info

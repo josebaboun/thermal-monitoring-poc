@@ -586,6 +586,7 @@ def monitoring_display():
             max_disappeared=config.get("tracking.max_disappeared", 75),
             max_distance=config.get("tracking.max_distance", 150.0),
             min_confirm_frames=config.get("tracking.min_confirm_frames", 5),
+            critical_threshold=st.session_state.cfg_critical,
         )
         renderer = VideoRenderer(config.visualization)
         video_proc = VideoProcessor(config.video)
