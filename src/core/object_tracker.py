@@ -154,7 +154,7 @@ class ThermalObjectTracker:
             info['_temp_sum'] += det_temp
             avg_temp = info['_temp_sum'] / info['total_detections']
             info['max_temperature'] = avg_temp
-            info['severity'] = detections[col]['severity'] if avg_temp <= info['max_temperature'] else info['severity']
+            info['mean_temperature'] = detections[col]['mean_temperature']
             # Re-evaluate severity based on average temperature
             info['severity'] = 'critical' if avg_temp > self.critical_threshold else 'warning'
 

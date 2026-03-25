@@ -49,10 +49,15 @@ class ThermalDetector:
         detections = []
         for (x, y, w, h) in merged_bboxes:
             roi_temp = temp_frame[y:y+h, x:x+w]
-            # Use 95th percentile for robust temperature reading
-            # (avoids outlier pixels from compression or bbox edge effects)
-            max_temp = float(np.percentile(roi_temp, 95))
-            mean_temp = float(np.mean(roi_temp))
+            # Use P75 of hot pixels only for representative temperature
+            # (ignores cold background in bbox, robust to edge effects)
+            hot_pixels = roi_temp[roi_temp > self.threshold]
+            if len(hot_pixels) > 0:
+                max_temp = float(np.percentile(hot_pixels, 75))
+                mean_temp = float(np.mean(hot_pixels))
+            else:
+                max_temp = float(np.percentile(roi_temp, 95))
+                mean_temp = float(np.mean(roi_temp))
             min_temp = float(np.min(roi_temp))
             area = int(w * h)
 
