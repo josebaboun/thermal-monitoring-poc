@@ -22,19 +22,38 @@ class TemperatureExtractor:
 
     def extract_from_rgb(self, frame_rgb: np.ndarray) -> np.ndarray:
         """
-        Extract approximate temperature from RGB thermal frame.
+        Extract approximate temperature from RGB thermal frame using
+        HSV-based rainbow colormap decoding.
 
-        Uses grayscale intensity mapped linearly to the configured
-        temperature range. The overlay regions are masked to avoid
-        interference from the camera's on-screen text/scale.
+        In a rainbow colormap, hue maps inversely to temperature:
+        - Blue (H~120 in OpenCV) = coldest
+        - Cyan (H~90) = cool
+        - Green (H~60) = medium
+        - Yellow (H~30) = warm
+        - Red (H~0) = hottest
+        Low-saturation bright pixels (near white) = very hot.
         """
         h, w = frame_rgb.shape[:2]
 
-        # Convert to grayscale
-        gray = cv2.cvtColor(frame_rgb, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        hsv = cv2.cvtColor(frame_rgb, cv2.COLOR_BGR2HSV)
+        hue = hsv[:, :, 0].astype(np.float32)       # 0-179
+        sat = hsv[:, :, 1].astype(np.float32)       # 0-255
+        val = hsv[:, :, 2].astype(np.float32)       # 0-255
 
-        # Simple linear mapping: 0 (darkest) → temp_min, 255 (brightest) → temp_max
-        temp_celsius = (gray / 255.0) * (self.temp_max - self.temp_min) + self.temp_min
+        # For saturated pixels: temperature is inverse of hue (capped at 120)
+        # Hue 120 (blue) = 0.0 (cold), Hue 0 (red) = 1.0 (hot)
+        hue_clamped = np.clip(hue, 0, 120)
+        normalized = 1.0 - (hue_clamped / 120.0)
+
+        # For low-saturation bright pixels (near white): very hot
+        white_mask = (sat < 60) & (val > 200)
+        normalized[white_mask] = 1.0
+
+        # For dark pixels (near black): cold / background
+        dark_mask = val < 30
+        normalized[dark_mask] = 0.0
+
+        temp_celsius = normalized * (self.temp_max - self.temp_min) + self.temp_min
 
         # Set overlay regions to temp_min so they don't trigger detections
         temp_celsius[:OVERLAY_TOP, :] = self.temp_min       # Top text
