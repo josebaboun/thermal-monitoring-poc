@@ -628,18 +628,26 @@ def monitoring_display():
                     if obj_id > st.session_state.last_object_id
                 }
 
-                # Update stats
+                # Update stats using tracker's averaged temperatures
                 current_max_temp = 0.0
-                if detections:
-                    current_max_temp = detections[0]["max_temperature"]
+                active_objects = tracker.get_active_objects()
+                if active_objects:
+                    confirmed_temps = [
+                        info["max_temperature"]
+                        for info in active_objects.values()
+                    ]
+                    current_max_temp = max(confirmed_temps) if confirmed_temps else 0.0
                     st.session_state.max_temp_overall = max(
                         st.session_state.max_temp_overall, current_max_temp
                     )
                 st.session_state.current_max_temp = current_max_temp
 
-                # Record temperature for chart
-                if detections:
-                    chart_temp = detections[0]["max_temperature"]
+                # Record temperature for chart (use tracker avg, not raw detection)
+                if active_objects:
+                    chart_temp = max(
+                        info["max_temperature"]
+                        for info in active_objects.values()
+                    )
                 else:
                     mask = temp_frame[35:-15, 8:]
                     chart_temp = float(np.percentile(mask, 95))
